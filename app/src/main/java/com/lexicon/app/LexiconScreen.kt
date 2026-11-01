@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
@@ -197,15 +198,18 @@ private fun LearningSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
-                AutoSpeechMode.entries.chunked(2).forEach { options ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        options.forEach { option ->
-                            FilterChip(
-                                selected = settings.autoSpeech == option,
-                                onClick = { vm.setAutoSpeech(option) },
-                                label = { Text(option.title) }
-                            )
-                        }
+                AutoSpeechMode.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            vm.setAutoSpeech(option)
+                        },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = settings.autoSpeech == option,
+                            onClick = { vm.setAutoSpeech(option) }
+                        )
+                        Text(option.title, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
                 Text(
