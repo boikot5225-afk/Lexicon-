@@ -2,6 +2,9 @@ package com.lexicon.app
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -30,18 +34,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 
 private enum class Tab(val title: String, val symbol: String) {
     WORDS("Словарь", "▤"),
@@ -240,16 +249,47 @@ private fun Review(
     vm: LexiconViewModel,
     padding: PaddingValues
 ) {
-    val due = cards.filter { it.nextReviewAt <= System.currentTimeMillis() }
+    // Both modes use the same due queue and the same SRS history.
+    var writingMode by rememberSaveable { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000L)
+            now = System.currentTimeMillis()
+        }
+    }
+    val due = cards.filter { it.nextReviewAt <= now }
         .sortedWith(compareBy<WordCard> { it.nextReviewAt }.thenBy { it.id })
     val current = due.firstOrNull()
-    var revealed by remember(current?.id) { mutableStateOf(false) }
+
+    // Answer state resets for each next card and when changing the exercise.
+    var revealed by remember(current?.id, writingMode) { mutableStateOf(false) }
+    var typed by remember(current?.id, writingMode) { mutableStateOf("") }
+    var checked by remember(current?.id, writingMode) { mutableStateOf(false) }
+    // Keep the submission guard across mode switches for the same card.
+    var submitted by remember(current?.id) { mutableStateOf(false) }
 
     Column(
-        Modifier.fillMaxSize().padding(padding).padding(16.dp),
+        Modifier.fillMaxSize().padding(padding).imePadding()
+            .verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("К повторению: " + due.size, style = MaterialTheme.typography.titleLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !writingMode,
+                enabled = !submitted,
+                onClick = { writingMode = false },
+                label = { Text("Карточки") }
+            )
+            FilterChip(
+                selected = writingMode,
+                enabled = !submitted,
+                onClick = { writingMode = true },
+                label = { Text("Написать слово") }
+            )
+        }
+
         if (current == null) {
             Text("На сегодня всё. Добавь новые карточки через «Импорт».")
         } else {
@@ -258,41 +298,178 @@ private fun Review(
                     Modifier.fillMaxWidth().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        current.word,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.headlineLarge
-                    )
-                    if (current.reading.isNotEmpty()) {
-                        Text(current.reading, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    }
-                    Text(current.example, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { speaker.speak(current.word, language) }) {
-                            Text("▶ Слово")
+                    if (writingMode) {
+                        Text(
+                            "Напиши слово по переводу",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            current.translation,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            current.exampleTranslation,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                        // Do not show any unmasked target-language text before checking.
+                        val cloze = WritingExercise.cloze(
+                            current.example, current.word, language
+                        )
+                        if (cloze != null) {
+                            Text(
+                                cloze,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        OutlinedButton(onClick = { speaker.speak(current.example, language) }) {
-                            Text("▶ Фраза")
-                        }
-                    }
-                    if (revealed) {
-                        HorizontalDivider()
-                        Text(current.translation, fontWeight = FontWeight.Bold)
-                        Text(current.exampleTranslation)
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OutlinedButton(onClick = { vm.rate(current, false) }) { Text("Не помню") }
-                            Button(onClick = { vm.rate(current, true) }) { Text("Помню") }
+                        Text(
+                            "Введи слово в той форме, в которой оно сохранено.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = typed,
+                            onValueChange = { typed = it },
+                            enabled = !checked && !submitted,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Твой ответ") },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Text,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    if (typed.isNotBlank() && !checked && !submitted) checked = true
+                                }
+                            )
+                        )
+
+                        if (!checked) {
+                            Button(
+                                enabled = typed.isNotBlank() && !submitted,
+                                onClick = { checked = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Проверить") }
+                        } else {
+                            val correct = WritingExercise.matches(typed, current.word)
+                            HorizontalDivider()
+                            Text(
+                                if (correct) "Верно!" else "Пока неверно",
+                                color = if (correct) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text("Правильный ответ: " + current.word, fontWeight = FontWeight.Bold)
+                            if (current.reading.isNotEmpty()) Text(current.reading)
+                            Text(current.example)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { speaker.speak(current.word, language) }) {
+                                    Text("▶ Слово")
+                                }
+                                OutlinedButton(onClick = { speaker.speak(current.example, language) }) {
+                                    Text("▶ Фраза")
+                                }
+                            }
+                            if (correct) {
+                                Button(
+                                    enabled = !submitted,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = {
+                                        submitted = true
+                                        vm.rate(current, true)
+                                        now = System.currentTimeMillis()
+                                    }
+                                ) { Text("Следующее") }
+                            } else {
+                                Text(
+                                    "Если ты ввёл другой допустимый вариант, можно засчитать вручную.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        enabled = !submitted,
+                                        onClick = {
+                                            submitted = true
+                                            vm.rate(current, false)
+                                            now = System.currentTimeMillis()
+                                        }
+                                    ) { Text("Не помню") }
+                                    Button(
+                                        enabled = !submitted,
+                                        onClick = {
+                                            submitted = true
+                                            vm.rate(current, true)
+                                            now = System.currentTimeMillis()
+                                        }
+                                    ) { Text("Засчитать") }
+                                }
+                            }
                         }
                     } else {
-                        Button(onClick = { revealed = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Показать перевод")
+                        Text(
+                            current.word,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.headlineLarge
+                        )
+                        if (current.reading.isNotEmpty()) {
+                            Text(
+                                current.reading,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Text(
+                            current.example,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(onClick = { speaker.speak(current.word, language) }) {
+                                Text("▶ Слово")
+                            }
+                            OutlinedButton(onClick = { speaker.speak(current.example, language) }) {
+                                Text("▶ Фраза")
+                            }
+                        }
+                        if (revealed) {
+                            HorizontalDivider()
+                            Text(current.translation, fontWeight = FontWeight.Bold)
+                            Text(current.exampleTranslation)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    enabled = !submitted,
+                                    onClick = {
+                                        submitted = true
+                                        vm.rate(current, false)
+                                        now = System.currentTimeMillis()
+                                    }
+                                ) { Text("Не помню") }
+                                Button(
+                                    enabled = !submitted,
+                                    onClick = {
+                                        submitted = true
+                                        vm.rate(current, true)
+                                        now = System.currentTimeMillis()
+                                    }
+                                ) { Text("Помню") }
+                            }
+                        } else {
+                            Button(
+                                onClick = { revealed = true },
+                                enabled = !submitted,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Показать перевод") }
                         }
                     }
                 }
             }
             Text(
-                "Успешное повторение: через 1, 3, 7, 14, 30, 60 дней. Ошибка: через 10 минут.",
+                "Оба режима влияют на одно расписание. Помню: 1, 3, 7, 14, 30, 60 дней. Ошибка: через 10 минут.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
