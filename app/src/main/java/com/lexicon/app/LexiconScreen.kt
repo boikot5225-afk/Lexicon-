@@ -30,6 +30,9 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -61,19 +65,51 @@ private enum class Tab(val title: String, val symbol: String) {
 @Composable
 fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
     var tab by rememberSaveable { mutableStateOf(Tab.WORDS) }
+    var showSettings by remember { mutableStateOf(false) }
     val selectedLanguage by vm.language.collectAsState()
+    val selectedSettings by vm.learningSettings.collectAsState()
+    val settings = if (selectedSettings.language == selectedLanguage) {
+        selectedSettings
+    } else LearningSettings(selectedLanguage)
     val cards by vm.cards.collectAsState()
     // Avoid showing the previous language's cards during a Flow switch.
     val visibleCards = cards.filter { it.language == selectedLanguage }
     val context = LocalContext.current
     val speaker = remember(context) { Speaker(context) }
     DisposableEffect(speaker) { onDispose { speaker.close() } }
+    LaunchedEffect(settings.speechRate) {
+        speaker.rate = settings.speechRate
+    }
+    if (showSettings) LearningSettingsDialog(
+        settings = settings, vm = vm, onClose = { showSettings = false }
+    )
 
     Scaffold(
         modifier = Modifier.safeDrawingPadding(),
         topBar = {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text("Lexicon", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            "Lexicon",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "Слова в контексте",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = { showSettings = true }) {
+                        Text("⚙ Настройки")
+                    }
+                }
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -106,10 +142,95 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
     ) { padding ->
         when (tab) {
             Tab.WORDS -> Dictionary(visibleCards, selectedLanguage, speaker, vm, padding)
-            Tab.REVIEW -> Review(visibleCards, selectedLanguage, speaker, vm, padding)
+            Tab.REVIEW -> Review(
+                visibleCards, selectedLanguage, speaker, vm, padding, settings
+            )
             Tab.IMPORT -> Import(selectedLanguage, vm, padding)
         }
     }
+}
+
+@Composable
+private fun LearningSettingsDialog(
+    settings: LearningSettings,
+    vm: LexiconViewModel,
+    onClose: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = {
+            Text("Настройки · " + (languages.firstOrNull { it.tag == settings.language }?.title ?: ""))
+        },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Новые слова в день", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Общий лимит на узнавание и письмо. Старые повторения не ограничены.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(5, 10, 20).forEach { n ->
+                        FilterChip(
+                            selected = settings.dailyNewWords == n,
+                            onClick = { vm.setDailyLimit(n) },
+                            label = { Text("$n") }
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(30, 50).forEach { n ->
+                        FilterChip(
+                            selected = settings.dailyNewWords == n,
+                            onClick = { vm.setDailyLimit(n) },
+                            label = { Text("$n") }
+                        )
+                    }
+                }
+                HorizontalDivider()
+                Text("Автоматическая озвучка", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Слово или пример звучат при появлении карточки. В режиме письма ответ озвучивается после проверки.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                AutoSpeechMode.entries.chunked(2).forEach { options ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        options.forEach { option ->
+                            FilterChip(
+                                selected = settings.autoSpeech == option,
+                                onClick = { vm.setAutoSpeech(option) },
+                                label = { Text(option.title) }
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Скорость · " + String.format(
+                        java.util.Locale.ROOT, "%.1f×", settings.speechRate
+                    ),
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Slider(
+                    value = settings.speechRate,
+                    onValueChange = vm::setSpeechRate,
+                    valueRange = 0.7f..1.3f,
+                    steps = 5
+                )
+                Text(
+                    "Все параметры сохраняются для каждого языка отдельно.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClose) { Text("Готово") }
+        }
+    )
 }
 
 @Composable
@@ -122,15 +243,31 @@ private fun Dictionary(
 ) {
     var expanded by rememberSaveable(language) { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<WordCard?>(null) }
+    var search by rememberSaveable(language) { mutableStateOf("") }
+    val filtered = remember(cards, search) {
+        if (search.isBlank()) cards else cards.filter {
+            it.word.contains(search.trim(), ignoreCase = true) ||
+                it.translation.contains(search.trim(), ignoreCase = true)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-        Text("Слов: " + cards.size, style = MaterialTheme.typography.titleMedium)
+        Text("Мои слова · " + cards.size, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            label = { Text("Поиск по слову или переводу") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
         if (cards.isEmpty()) {
             Text("Словарь пуст. Скопируй карточки из ИИ и вставь их через «Импорт».")
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(cards, key = { it.id }) { card ->
+                if (filtered.isEmpty()) item { Text("Совпадений не найдено") }
+                items(filtered, key = { it.id }) { card ->
                     Card(Modifier.fillMaxWidth().clickable {
                         expanded = if (expanded == card.id) null else card.id
                     }) {
@@ -257,7 +394,8 @@ private fun Review(
     language: String,
     speaker: Speaker,
     vm: LexiconViewModel,
-    padding: PaddingValues
+    padding: PaddingValues,
+    settings: LearningSettings
 ) {
     // Recognition and writing are scheduled independently, with one daily new-word limit.
     var writingMode by rememberSaveable(language) { mutableStateOf(false) }
@@ -269,7 +407,9 @@ private fun Review(
         }
     }
     val mode = if (writingMode) ReviewMode.WRITING else ReviewMode.RECOGNITION
-    val plan = ReviewQueue.build(cards, mode, now)
+    val plan = ReviewQueue.build(
+        cards, mode, now, dailyLimit = settings.dailyNewWords
+    )
     val due = plan.due
     val current = due.firstOrNull()
 
@@ -279,6 +419,22 @@ private fun Review(
     var checked by remember(current?.id, writingMode) { mutableStateOf(false) }
     // Keep the submission guard across mode switches for the same card.
     var submitted by remember(language, current?.id) { mutableStateOf(false) }
+
+    // Stop the previous audio when changing mode or card. Never give away
+    // a written answer until the user has pressed Check.
+    LaunchedEffect(
+        current?.id, language, writingMode, checked,
+        settings.autoSpeech, settings.speechRate, speaker.ready
+    ) {
+        speaker.stop()
+        val card = current
+        if (card != null && speaker.ready && (!writingMode || checked)) {
+            speaker.rate = settings.speechRate
+            speaker.speakAutomatically(
+                card.word, card.example, language, settings.autoSpeech
+            )
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().padding(padding).imePadding()
@@ -291,8 +447,16 @@ private fun Review(
         )
         Text(
             "Новых сегодня: " + plan.introducedToday + "/" + plan.dailyLimit +
-                " · Ожидают изучения: " + plan.unseenTotal,
-            style = MaterialTheme.typography.bodySmall
+                "   ·   Ожидают: " + plan.unseenTotal,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        LinearProgressIndicator(
+            progress = {
+                (plan.introducedToday.toFloat() / plan.dailyLimit.coerceAtLeast(1))
+                    .coerceIn(0f, 1f)
+            },
+            modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
@@ -316,7 +480,13 @@ private fun Review(
                 Text("В этом режиме сейчас нет карточек к повторению.")
             }
         } else {
-            Card(Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
                 Column(
                     Modifier.fillMaxWidth().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -492,7 +662,7 @@ private fun Review(
                 }
             }
             Text(
-                "Узнавание и письмо повторяются независимо. Общий лимит: 10 новых слов в день на язык. Успех: 1, 3, 7, 14, 30, 60 дней; ошибка: через 10 минут.",
+                "Узнавание и письмо повторяются независимо. Лимит новых слов меняется в настройках. Успех: 1, 3, 7, 14, 30, 60 дней; ошибка: через 10 минут.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
