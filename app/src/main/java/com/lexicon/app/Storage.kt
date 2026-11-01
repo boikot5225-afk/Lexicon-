@@ -1,6 +1,7 @@
 package com.lexicon.app
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -32,9 +33,13 @@ data class WordCard(
     val nextReviewAt: Long = 0,
     val successfulReviews: Int = 0,
     val intervalDays: Int = 0,
+    @ColumnInfo(defaultValue = "0")
     val writingNextReviewAt: Long = 0,
+    @ColumnInfo(defaultValue = "0")
     val writingSuccessfulReviews: Int = 0,
+    @ColumnInfo(defaultValue = "0")
     val writingIntervalDays: Int = 0,
+    @ColumnInfo(defaultValue = "0")
     val introducedAt: Long = 0
 )
 
