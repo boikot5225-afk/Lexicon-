@@ -11,8 +11,8 @@ android {
         applicationId = "com.lexicon.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.3.1"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -20,6 +20,28 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    signingConfigs {
+        create("release") {
+            val signingFile = System.getenv("LEXICON_KEYSTORE_FILE")
+            if (!signingFile.isNullOrBlank()) {
+                storeFile = file(signingFile)
+                storePassword = System.getenv("LEXICON_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("LEXICON_KEY_ALIAS")
+                keyPassword = System.getenv("LEXICON_KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            if (!System.getenv("LEXICON_KEYSTORE_FILE").isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
 }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.09.01"))

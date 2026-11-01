@@ -6,3 +6,10 @@ local.properties
 *.iml
 *.apk
 *.aab
+
+# Signing keys are private
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing-secrets.txt
