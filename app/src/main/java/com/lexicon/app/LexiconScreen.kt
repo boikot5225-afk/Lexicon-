@@ -142,6 +142,16 @@ private fun Dictionary(
                                 HorizontalDivider()
                                 Text(card.example)
                                 Text(card.exampleTranslation)
+                                Text(
+                                    "Узнавание: " + card.successfulReviews +
+                                        " подряд, интервал " + card.intervalDays + " дн.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "Письмо: " + card.writingSuccessfulReviews +
+                                        " подряд, интервал " + card.writingIntervalDays + " дн.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     TextButton(onClick = { speaker.speak(card.word, language) }) {
                                         Text("▶ Слово")
@@ -249,8 +259,8 @@ private fun Review(
     vm: LexiconViewModel,
     padding: PaddingValues
 ) {
-    // Both modes use the same due queue and the same SRS history.
-    var writingMode by rememberSaveable { mutableStateOf(false) }
+    // Recognition and writing are scheduled independently, with one daily new-word limit.
+    var writingMode by rememberSaveable(language) { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -258,8 +268,9 @@ private fun Review(
             now = System.currentTimeMillis()
         }
     }
-    val due = cards.filter { it.nextReviewAt <= now }
-        .sortedWith(compareBy<WordCard> { it.nextReviewAt }.thenBy { it.id })
+    val mode = if (writingMode) ReviewMode.WRITING else ReviewMode.RECOGNITION
+    val plan = ReviewQueue.build(cards, mode, now)
+    val due = plan.due
     val current = due.firstOrNull()
 
     // Answer state resets for each next card and when changing the exercise.
@@ -267,14 +278,22 @@ private fun Review(
     var typed by remember(current?.id, writingMode) { mutableStateOf("") }
     var checked by remember(current?.id, writingMode) { mutableStateOf(false) }
     // Keep the submission guard across mode switches for the same card.
-    var submitted by remember(current?.id) { mutableStateOf(false) }
+    var submitted by remember(language, current?.id) { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().padding(padding).imePadding()
             .verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("К повторению: " + due.size, style = MaterialTheme.typography.titleLarge)
+        Text(
+            (if (writingMode) "Письмо" else "Узнавание") + " · к повторению: " + due.size,
+            style = MaterialTheme.typography.titleLarge
+        )
+        Text(
+            "Новых сегодня: " + plan.introducedToday + "/" + plan.dailyLimit +
+                " · Ожидают изучения: " + plan.unseenTotal,
+            style = MaterialTheme.typography.bodySmall
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = !writingMode,
@@ -291,7 +310,11 @@ private fun Review(
         }
 
         if (current == null) {
-            Text("На сегодня всё. Добавь новые карточки через «Импорт».")
+            if (plan.unseenTotal > 0 && plan.remainingNew == 0) {
+                Text("Лимит новых слов на сегодня исчерпан. Плановые повторения остаются доступны.")
+            } else {
+                Text("В этом режиме сейчас нет карточек к повторению.")
+            }
         } else {
             Card(Modifier.fillMaxWidth()) {
                 Column(
@@ -380,7 +403,7 @@ private fun Review(
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = {
                                         submitted = true
-                                        vm.rate(current, true)
+                                        vm.rate(current, true, mode)
                                         now = System.currentTimeMillis()
                                     }
                                 ) { Text("Следующее") }
@@ -394,7 +417,7 @@ private fun Review(
                                         enabled = !submitted,
                                         onClick = {
                                             submitted = true
-                                            vm.rate(current, false)
+                                            vm.rate(current, false, mode)
                                             now = System.currentTimeMillis()
                                         }
                                     ) { Text("Не помню") }
@@ -402,7 +425,7 @@ private fun Review(
                                         enabled = !submitted,
                                         onClick = {
                                             submitted = true
-                                            vm.rate(current, true)
+                                            vm.rate(current, true, mode)
                                             now = System.currentTimeMillis()
                                         }
                                     ) { Text("Засчитать") }
@@ -445,7 +468,7 @@ private fun Review(
                                     enabled = !submitted,
                                     onClick = {
                                         submitted = true
-                                        vm.rate(current, false)
+                                        vm.rate(current, false, mode)
                                         now = System.currentTimeMillis()
                                     }
                                 ) { Text("Не помню") }
@@ -453,7 +476,7 @@ private fun Review(
                                     enabled = !submitted,
                                     onClick = {
                                         submitted = true
-                                        vm.rate(current, true)
+                                        vm.rate(current, true, mode)
                                         now = System.currentTimeMillis()
                                     }
                                 ) { Text("Помню") }
@@ -469,7 +492,7 @@ private fun Review(
                 }
             }
             Text(
-                "Оба режима влияют на одно расписание. Помню: 1, 3, 7, 14, 30, 60 дней. Ошибка: через 10 минут.",
+                "Узнавание и письмо повторяются независимо. Общий лимит: 10 новых слов в день на язык. Успех: 1, 3, 7, 14, 30, 60 дней; ошибка: через 10 минут.",
                 style = MaterialTheme.typography.bodySmall
             )
         }

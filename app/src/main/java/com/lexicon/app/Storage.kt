@@ -11,6 +11,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -29,7 +31,11 @@ data class WordCard(
     val createdAt: Long = System.currentTimeMillis(),
     val nextReviewAt: Long = 0,
     val successfulReviews: Int = 0,
-    val intervalDays: Int = 0
+    val intervalDays: Int = 0,
+    val writingNextReviewAt: Long = 0,
+    val writingSuccessfulReviews: Int = 0,
+    val writingIntervalDays: Int = 0,
+    val introducedAt: Long = 0
 )
 
 @Dao
@@ -47,17 +53,33 @@ interface CardDao {
     suspend fun delete(id: Long)
 }
 
-@Database(entities = [WordCard::class], version = 1, exportSchema = false)
+@Database(entities = [WordCard::class], version = 2, exportSchema = false)
 abstract class LexiconDatabase : RoomDatabase() {
     abstract fun cardDao(): CardDao
 
     companion object {
         @Volatile private var instance: LexiconDatabase? = null
+        // Keep old recognition progress and all imported cards when upgrading from 0.2.
+        // Writing history starts empty and is scheduled independently.
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cards ADD COLUMN writingNextReviewAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cards ADD COLUMN writingSuccessfulReviews INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cards ADD COLUMN writingIntervalDays INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cards ADD COLUMN introducedAt INTEGER NOT NULL DEFAULT 0")
+                // Previously reviewed cards are no longer considered unintroduced.
+                db.execSQL(
+                    "UPDATE cards SET introducedAt = createdAt " +
+                        "WHERE nextReviewAt > 0 OR successfulReviews > 0"
+                )
+            }
+        }
+
         fun get(context: Context): LexiconDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext, LexiconDatabase::class.java, "lexicon.db"
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }
 }

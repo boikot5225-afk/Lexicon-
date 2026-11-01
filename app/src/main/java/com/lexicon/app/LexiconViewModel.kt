@@ -57,9 +57,9 @@ class LexiconViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun rate(card: WordCard, remembered: Boolean) {
+    fun rate(card: WordCard, remembered: Boolean, mode: ReviewMode) {
         viewModelScope.launch {
-            dao.update(ReviewSchedule.rate(card, remembered, System.currentTimeMillis()))
+            dao.update(ReviewSchedule.rate(card, remembered, System.currentTimeMillis(), mode))
         }
     }
 
