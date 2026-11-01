@@ -73,8 +73,11 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
         selectedSettings
     } else LearningSettings(selectedLanguage)
     val cards by vm.cards.collectAsState()
+    val allExamples by vm.contexts.collectAsState()
     // Avoid showing the previous language's cards during a Flow switch.
     val visibleCards = cards.filter { it.language == selectedLanguage }
+    val visibleIds = visibleCards.map { it.id }.toSet()
+    val visibleExamples = allExamples.filter { it.cardId in visibleIds }
     val context = LocalContext.current
     val speaker = remember(context) { Speaker(context) }
     DisposableEffect(speaker) { onDispose { speaker.close() } }
@@ -142,9 +145,9 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
         }
     ) { padding ->
         when (tab) {
-            Tab.WORDS -> Dictionary(visibleCards, selectedLanguage, speaker, vm, padding)
+            Tab.WORDS -> Dictionary(visibleCards, visibleExamples, selectedLanguage, speaker, vm, padding)
             Tab.REVIEW -> Review(
-                visibleCards, selectedLanguage, speaker, vm, padding, settings
+                visibleCards, visibleExamples, selectedLanguage, speaker, vm, padding, settings
             )
             Tab.IMPORT -> Import(selectedLanguage, vm, padding)
         }
@@ -240,6 +243,7 @@ private fun LearningSettingsDialog(
 @Composable
 private fun Dictionary(
     cards: List<WordCard>,
+    examples: List<CardExample>,
     language: String,
     speaker: Speaker,
     vm: LexiconViewModel,
@@ -247,6 +251,11 @@ private fun Dictionary(
 ) {
     var expanded by rememberSaveable(language) { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<WordCard?>(null) }
+    var addingTo by remember { mutableStateOf<WordCard?>(null) }
+    var contextText by remember { mutableStateOf("") }
+    var contextTranslation by remember { mutableStateOf("") }
+    var contextError by remember { mutableStateOf("") }
+    var contextSaving by remember { mutableStateOf(false) }
     var search by rememberSaveable(language) { mutableStateOf("") }
     val filtered = remember(cards, search) {
         if (search.isBlank()) cards else cards.filter {
@@ -281,8 +290,30 @@ private fun Dictionary(
                             Text(card.translation)
                             if (expanded == card.id) {
                                 HorizontalDivider()
-                                Text(card.example)
-                                Text(card.exampleTranslation)
+                                val contexts = examples.filter { it.cardId == card.id }
+                                    .ifEmpty {
+                                        listOf(CardExample(
+                                            cardId = card.id,
+                                            example = card.example,
+                                            exampleTranslation = card.exampleTranslation
+                                        ))
+                                    }
+                                Text("Примеры · " + contexts.size,
+                                    style = MaterialTheme.typography.titleSmall)
+                                contexts.forEachIndexed { index, ctx ->
+                                    Text(ctx.example)
+                                    Text(ctx.exampleTranslation,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    TextButton(onClick = { speaker.speak(ctx.example, language) }) {
+                                        Text("▶ Пример " + (index + 1))
+                                    }
+                                }
+                                TextButton(onClick = {
+                                    addingTo = card
+                                    contextText = ""
+                                    contextTranslation = ""
+                                    contextError = ""
+                                }) { Text("+ Добавить пример") }
                                 Text(
                                     "Узнавание: " + card.successfulReviews +
                                         " подряд, интервал " + card.intervalDays + " дн.",
@@ -312,6 +343,60 @@ private fun Dictionary(
         }
     }
 
+    addingTo?.let { card ->
+        AlertDialog(
+            onDismissRequest = { if (!contextSaving) addingTo = null },
+            title = { Text("Новый пример · " + card.word) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = contextText,
+                        onValueChange = { contextText = it; contextError = "" },
+                        label = { Text("Предложение на изучаемом языке") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = contextTranslation,
+                        onValueChange = { contextTranslation = it; contextError = "" },
+                        label = { Text("Перевод предложения") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (contextError.isNotEmpty()) {
+                        Text(contextError, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !contextSaving &&
+                        contextText.isNotBlank() && contextTranslation.isNotBlank(),
+                    onClick = {
+                        contextSaving = true
+                        vm.addContext(card.id, contextText, contextTranslation) { result ->
+                            contextSaving = false
+                            result.fold(
+                                onSuccess = { added ->
+                                    if (added) addingTo = null
+                                    else contextError = "Такой пример уже есть у этого слова."
+                                },
+                                onFailure = { error ->
+                                    contextError = error.message ?: "Не удалось сохранить пример."
+                                }
+                            )
+                        }
+                    }
+                ) { Text(if (contextSaving) "Сохранение" else "Сохранить") }
+            },
+            dismissButton = {
+                TextButton(enabled = !contextSaving, onClick = { addingTo = null }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
     deleting?.let { card ->
         AlertDialog(
             onDismissRequest = { deleting = null },
@@ -339,6 +424,11 @@ private fun Import(language: String, vm: LexiconViewModel, padding: PaddingValue
     Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
         Text("Массовый импорт", style = MaterialTheme.typography.titleLarge)
         Text("слово | транскрипция | перевод | пример | перевод примера")
+        Text(
+            "Чтобы добавить контекст к слову, повтори слово и перевод в строке с другим примером.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = text,
@@ -357,7 +447,11 @@ private fun Import(language: String, vm: LexiconViewModel, padding: PaddingValue
                 vm.import(preview.cards) { outcome ->
                     saving = false
                     result = outcome.fold(
-                        onSuccess = { "Добавлено: " + it.added + " · Дубликатов: " + it.skipped },
+                        onSuccess = {
+                            "Новых слов: " + it.added +
+                                " · Примеров: " + it.examplesAdded +
+                                " · Повторов: " + it.skipped
+                        },
                         onFailure = { "Ошибка сохранения: " + (it.message ?: "неизвестна") }
                     )
                 }
@@ -395,6 +489,7 @@ private fun Import(language: String, vm: LexiconViewModel, padding: PaddingValue
 @Composable
 private fun Review(
     cards: List<WordCard>,
+    examples: List<CardExample>,
     language: String,
     speaker: Speaker,
     vm: LexiconViewModel,
@@ -420,6 +515,7 @@ private fun Review(
     )
     val due = plan.due
     val current = due.firstOrNull()
+    val activeExample = current?.let { ExampleSelection.choose(it, mode, examples) }
 
     // Answer state resets for each next card and when changing the exercise.
     var revealed by remember(current?.id, writingMode) { mutableStateOf(false) }
@@ -431,7 +527,7 @@ private fun Review(
     // Stop the previous audio when changing mode or card. Never give away
     // a written answer until the user has pressed Check.
     LaunchedEffect(
-        current?.id, language, writingMode, checked,
+        current?.id, activeExample?.id, language, writingMode, checked,
         settings.autoSpeech, settings.speechRate, speaker.ready
     ) {
         speaker.stop()
@@ -439,7 +535,8 @@ private fun Review(
         if (card != null && speaker.ready && (!writingMode || checked)) {
             speaker.rate = settings.speechRate
             speaker.speakAutomatically(
-                card.word, card.example, language, settings.autoSpeech
+                card.word, activeExample?.example ?: card.example,
+                language, settings.autoSpeech
             )
         }
     }
@@ -511,13 +608,13 @@ private fun Review(
                             style = MaterialTheme.typography.headlineSmall
                         )
                         Text(
-                            current.exampleTranslation,
+                            activeExample?.exampleTranslation ?: current.exampleTranslation,
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center
                         )
                         // Do not show any unmasked target-language text before checking.
                         val cloze = WritingExercise.cloze(
-                            current.example, current.word, language
+                            activeExample?.example ?: current.example, current.word, language
                         )
                         if (cloze != null) {
                             Text(
@@ -566,12 +663,12 @@ private fun Review(
                             )
                             Text("Правильный ответ: " + current.word, fontWeight = FontWeight.Bold)
                             if (current.reading.isNotEmpty()) Text(current.reading)
-                            Text(current.example)
+                            Text(activeExample?.example ?: current.example)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { speaker.speak(current.word, language) }) {
                                     Text("▶ Слово")
                                 }
-                                OutlinedButton(onClick = { speaker.speak(current.example, language) }) {
+                                OutlinedButton(onClick = { speaker.speak(activeExample?.example ?: current.example, language) }) {
                                     Text("▶ Фраза")
                                 }
                             }
@@ -625,7 +722,7 @@ private fun Review(
                             )
                         }
                         Text(
-                            current.example,
+                            activeExample?.example ?: current.example,
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center
                         )
@@ -640,7 +737,7 @@ private fun Review(
                         if (revealed) {
                             HorizontalDivider()
                             Text(current.translation, fontWeight = FontWeight.Bold)
-                            Text(current.exampleTranslation)
+                            Text(activeExample?.exampleTranslation ?: current.exampleTranslation)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
                                     enabled = !submitted,
@@ -667,10 +764,21 @@ private fun Review(
                             ) { Text("Показать перевод") }
                         }
                     }
+                    if (current.introducedAt == 0L) {
+                        TextButton(
+                            enabled = !submitted,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                submitted = true
+                                vm.markAlreadyKnown(current, mode)
+                                now = System.currentTimeMillis()
+                            }
+                        ) { Text("Уже знаю · проверить через 30 дней") }
+                    }
                 }
             }
             Text(
-                "Узнавание и письмо повторяются независимо. Лимит новых слов меняется в настройках. Успех: 1, 3, 7, 14, 30, 60 дней; ошибка: через 10 минут.",
+                "Узнавание и письмо повторяются независимо. Ошибка: повтор через 10 минут с небольшим откатом. «Уже знаю» не расходует дневной лимит.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
