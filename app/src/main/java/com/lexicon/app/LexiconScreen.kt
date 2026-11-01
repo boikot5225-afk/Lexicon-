@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -53,11 +54,14 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
     var tab by rememberSaveable { mutableStateOf(Tab.WORDS) }
     val selectedLanguage by vm.language.collectAsState()
     val cards by vm.cards.collectAsState()
+    // Avoid showing the previous language's cards during a Flow switch.
+    val visibleCards = cards.filter { it.language == selectedLanguage }
     val context = LocalContext.current
     val speaker = remember(context) { Speaker(context) }
     DisposableEffect(speaker) { onDispose { speaker.close() } }
 
     Scaffold(
+        modifier = Modifier.safeDrawingPadding(),
         topBar = {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("Lexicon", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -92,8 +96,8 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
         }
     ) { padding ->
         when (tab) {
-            Tab.WORDS -> Dictionary(cards, selectedLanguage, speaker, vm, padding)
-            Tab.REVIEW -> Review(cards, selectedLanguage, speaker, vm, padding)
+            Tab.WORDS -> Dictionary(visibleCards, selectedLanguage, speaker, vm, padding)
+            Tab.REVIEW -> Review(visibleCards, selectedLanguage, speaker, vm, padding)
             Tab.IMPORT -> Import(selectedLanguage, vm, padding)
         }
     }
