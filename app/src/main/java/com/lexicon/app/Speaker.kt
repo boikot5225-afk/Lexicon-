@@ -13,6 +13,7 @@ class Speaker(context: Context) : TextToSpeech.OnInitListener {
         private set
     var message by mutableStateOf("")
         private set
+    var rate: Float = 1.0f
 
     init { tts = TextToSpeech(context.applicationContext, this) }
 
@@ -21,24 +22,54 @@ class Speaker(context: Context) : TextToSpeech.OnInitListener {
         if (!ready) message = "Озвучка Android недоступна"
     }
 
-    fun speak(text: String, tag: String) {
+    private fun prepare(tag: String): TextToSpeech? {
         val engine = tts
         if (!ready || engine == null) {
             message = "Озвучка ещё не готова"
-            return
+            return null
         }
-        val result = engine.setLanguage(Locale.forLanguageTag(tag))
-        if (result == TextToSpeech.LANG_MISSING_DATA ||
-            result == TextToSpeech.LANG_NOT_SUPPORTED
+        val languageResult = engine.setLanguage(Locale.forLanguageTag(tag))
+        if (languageResult == TextToSpeech.LANG_MISSING_DATA ||
+            languageResult == TextToSpeech.LANG_NOT_SUPPORTED
         ) {
             message = "Нет голоса для этого языка. Установи его в настройках Android"
-            return
+            return null
         }
+        engine.setSpeechRate(rate.coerceIn(0.7f, 1.3f))
         message = ""
-        if (engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "lexicon") == TextToSpeech.ERROR) {
+        return engine
+    }
+
+    fun speak(text: String, tag: String) {
+        val engine = prepare(tag) ?: return
+        if (engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "lexicon-manual") ==
+            TextToSpeech.ERROR
+        ) {
             message = "Ошибка воспроизведения"
         }
     }
+
+    fun speakAutomatically(
+        word: String, example: String, tag: String, mode: AutoSpeechMode
+    ) {
+        if (mode == AutoSpeechMode.OFF) return
+        val engine = prepare(tag) ?: return
+        val items = when (mode) {
+            AutoSpeechMode.OFF -> emptyList()
+            AutoSpeechMode.WORD -> listOf(word)
+            AutoSpeechMode.EXAMPLE -> listOf(example)
+            AutoSpeechMode.BOTH -> listOf(word, example)
+        }.filter { it.isNotBlank() }
+        items.forEachIndexed { index, item ->
+            if (engine.speak(
+                item,
+                if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
+                null, "lexicon-auto-" + index
+            ) == TextToSpeech.ERROR) message = "Ошибка автоозвучки"
+        }
+    }
+
+    fun stop() { tts?.stop() }
 
     fun close() {
         tts?.stop()

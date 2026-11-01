@@ -16,6 +16,22 @@ class ReviewQueueTest {
     private val now = 50_000L
     private val today = 30_000L
 
+    @Test fun configurableDailyLimitCanBeTwenty() {
+        val unseen = (1L..28L).map { card(it) }
+        val plan = ReviewQueue.build(unseen, ReviewMode.WRITING, now, today, dailyLimit = 20)
+        assertEquals(20, plan.due.size)
+        assertEquals(20, plan.remainingNew)
+    }
+
+    @Test fun loweringDailyLimitKeepsOldReviews() {
+        val dueOld = (1L..10L).map { card(it, 35_000L, nextRec = 40_000L) }
+        val plan = ReviewQueue.build(
+            dueOld + card(11L), ReviewMode.RECOGNITION, now, today, dailyLimit = 5
+        )
+        assertEquals(10, plan.due.size)
+        assertEquals(0, plan.remainingNew)
+    }
+
     @Test fun limitsNewWordsToTenAcrossModes() {
         val unseen = (1L..15L).map { card(it) }
         val reading = ReviewQueue.build(unseen, ReviewMode.RECOGNITION, now, today)
