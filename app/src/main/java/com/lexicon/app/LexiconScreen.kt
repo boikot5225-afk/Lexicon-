@@ -406,6 +406,10 @@ private fun Review(
             now = System.currentTimeMillis()
         }
     }
+    // Stop speech when leaving the review tab as well as when changing cards.
+    DisposableEffect(speaker) {
+        onDispose { speaker.stop() }
+    }
     val mode = if (writingMode) ReviewMode.WRITING else ReviewMode.RECOGNITION
     val plan = ReviewQueue.build(
         cards, mode, now, dailyLimit = settings.dailyNewWords
