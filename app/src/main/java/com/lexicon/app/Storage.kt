@@ -5,6 +5,8 @@ import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Transaction
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -34,13 +36,45 @@ data class WordCard(
     val successfulReviews: Int = 0,
     val intervalDays: Int = 0,
     @ColumnInfo(defaultValue = "0")
+    val recognitionLapses: Int = 0,
+    @ColumnInfo(defaultValue = "0")
     val writingNextReviewAt: Long = 0,
     @ColumnInfo(defaultValue = "0")
     val writingSuccessfulReviews: Int = 0,
     @ColumnInfo(defaultValue = "0")
     val writingIntervalDays: Int = 0,
     @ColumnInfo(defaultValue = "0")
+    val writingLapses: Int = 0,
+    @ColumnInfo(defaultValue = "0")
     val introducedAt: Long = 0
+)
+
+@Entity(
+    tableName = "card_examples",
+    foreignKeys = [
+        ForeignKey(
+            entity = WordCard::class,
+            parentColumns = ["id"],
+            childColumns = ["cardId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["cardId"]),
+        Index(value = ["cardId", "example", "exampleTranslation"], unique = true)
+    ]
+)
+data class CardExample(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val cardId: Long,
+    val example: String,
+    val exampleTranslation: String
+)
+
+data class ImportStats(
+    val added: Int,
+    val examplesAdded: Int,
+    val skipped: Int
 )
 
 @Dao
@@ -51,6 +85,65 @@ interface CardDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(cards: List<WordCard>): List<Long>
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertOne(card: WordCard): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertExample(row: CardExample): Long
+
+    @Query("SELECT id FROM cards WHERE language = :language AND word = :word AND translation = :translation LIMIT 1")
+    suspend fun findCardId(language: String, word: String, translation: String): Long?
+
+    @Query("SELECT card_examples.* FROM card_examples INNER JOIN cards ON cards.id = card_examples.cardId WHERE cards.language = :language ORDER BY card_examples.id")
+    fun observeExamples(language: String): Flow<List<CardExample>>
+
+    @Transaction
+    suspend fun importCards(language: String, rows: List<ImportCard>): ImportStats {
+        var added = 0
+        var examplesAdded = 0
+        var skipped = 0
+        for (row in rows) {
+            val created = insertOne(
+                WordCard(
+                    language = language,
+                    word = row.word,
+                    reading = row.reading,
+                    translation = row.translation,
+                    example = row.example,
+                    exampleTranslation = row.exampleTranslation
+                )
+            )
+            val cardId = if (created > 0) {
+                added++
+                created
+            } else {
+                findCardId(language, row.word, row.translation)
+                    ?: error("Не удалось найти уже существующее слово")
+            }
+            val contextId = insertExample(
+                CardExample(
+                    cardId = cardId,
+                    example = row.example,
+                    exampleTranslation = row.exampleTranslation
+                )
+            )
+            if (contextId > 0) examplesAdded++ else skipped++
+        }
+        return ImportStats(added, examplesAdded, skipped)
+    }
+
+    @Transaction
+    suspend fun addContext(cardId: Long, text: String, translation: String): Boolean {
+        require(text.isNotBlank() && translation.isNotBlank())
+        return insertExample(
+            CardExample(
+                cardId = cardId,
+                example = text.trim(),
+                exampleTranslation = translation.trim()
+            )
+        ) > 0L
+    }
+
     @Update
     suspend fun update(card: WordCard)
 
@@ -58,7 +151,7 @@ interface CardDao {
     suspend fun delete(id: Long)
 }
 
-@Database(entities = [WordCard::class], version = 2, exportSchema = false)
+@Database(entities = [WordCard::class, CardExample::class], version = 3, exportSchema = false)
 abstract class LexiconDatabase : RoomDatabase() {
     abstract fun cardDao(): CardDao
 
@@ -80,11 +173,35 @@ abstract class LexiconDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cards ADD COLUMN recognitionLapses INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cards ADD COLUMN writingLapses INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS card_examples (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "cardId INTEGER NOT NULL, " +
+                        "example TEXT NOT NULL, " +
+                        "exampleTranslation TEXT NOT NULL, " +
+                        "FOREIGN KEY(cardId) REFERENCES cards(id) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_card_examples_cardId ON card_examples(cardId)")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_card_examples_cardId_example_exampleTranslation " +
+                        "ON card_examples(cardId, example, exampleTranslation)"
+                )
+                db.execSQL(
+                    "INSERT INTO card_examples (cardId, example, exampleTranslation) " +
+                        "SELECT id, example, exampleTranslation FROM cards"
+                )
+            }
+        }
+
         fun get(context: Context): LexiconDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext, LexiconDatabase::class.java, "lexicon.db"
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

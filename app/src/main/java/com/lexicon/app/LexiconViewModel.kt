@@ -20,7 +20,6 @@ val languages = listOf(
     Language("es", "Español"),
     Language("ja", "日本語")
 )
-data class ImportStats(val added: Int, val skipped: Int)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LexiconViewModel(app: Application) : AndroidViewModel(app) {
@@ -30,6 +29,9 @@ class LexiconViewModel(app: Application) : AndroidViewModel(app) {
     private val preferences = MutableStateFlow(settingsStore.load("zh-CN"))
     val learningSettings: StateFlow<LearningSettings> = preferences.asStateFlow()
     val language: StateFlow<String> = selection.asStateFlow()
+    val contexts: StateFlow<List<CardExample>> = selection.flatMapLatest {
+        dao.observeExamples(it)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val cards: StateFlow<List<WordCard>> = selection.flatMapLatest {
         dao.observeByLanguage(it)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -63,24 +65,26 @@ class LexiconViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun import(rows: List<ImportCard>, onDone: (Result<ImportStats>) -> Unit) {
-        val languageNow = selection.value
+        val currentLanguage = selection.value
         viewModelScope.launch {
-            val result = runCatching {
-                val entities = rows.map {
-                    WordCard(
-                        language = languageNow,
-                        word = it.word,
-                        reading = it.reading,
-                        translation = it.translation,
-                        example = it.example,
-                        exampleTranslation = it.exampleTranslation
-                    )
-                }
-                val ids = dao.insert(entities)
-                val saved = ids.count { it != -1L }
-                ImportStats(saved, rows.size - saved)
-            }
-            onDone(result)
+            onDone(runCatching { dao.importCards(currentLanguage, rows) })
+        }
+    }
+
+    fun addContext(
+        cardId: Long,
+        example: String,
+        translation: String,
+        onDone: (Result<Boolean>) -> Unit
+    ) {
+        viewModelScope.launch {
+            onDone(runCatching { dao.addContext(cardId, example, translation) })
+        }
+    }
+
+    fun markAlreadyKnown(card: WordCard, mode: ReviewMode) {
+        viewModelScope.launch {
+            dao.update(ReviewSchedule.markAlreadyKnown(card, mode, System.currentTimeMillis()))
         }
     }
 
