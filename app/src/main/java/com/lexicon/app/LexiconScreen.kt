@@ -81,7 +81,7 @@ fun LexiconScreen(vm: LexiconViewModel = viewModel()) {
     // A running review session hides the navigation and takes the whole screen.
     var session by rememberSaveable { mutableStateOf<ReviewMode?>(null) }
     var wordFilter by rememberSaveable { mutableStateOf(WordFilter.ALL) }
-    var showSettings by remember { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val selectedLanguage by vm.language.collectAsState()
     val selectedSettings by vm.learningSettings.collectAsState()
     val settings = if (selectedSettings.language == selectedLanguage) {
@@ -375,6 +375,8 @@ private fun LearningSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                BackupSection(vm)
             }
         },
         confirmButton = {

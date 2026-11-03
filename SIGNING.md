@@ -21,13 +21,24 @@ It produces both lexicon-debug-apk and lexicon-signed-release-apk artifacts.
 The release APK is signed using the stable release key. Debug APKs are signed by
 ephemeral CI debug keys and do NOT have a stable identity across builds.
 
-## Important compatibility warning
+## Switching from the debug build to the signed release
 
 Android refuses to update an installed app with an APK signed by a different
-certificate, even if both APKs have the same package name. Do NOT delete an
-installed Lexicon until its data has been backed up. The current version lacks
-manual export/restore. The signing keystore and its password must be stored
-safely for every future release. If they are lost, updates signed by the
-same identity may no longer be possible.
+certificate, even if both APKs have the same package name. Moving from the
+debug APK to the release APK therefore needs a reinstall:
+
+1. In the installed debug Lexicon (0.7.0 or newer): Settings → «Резервная копия» →
+   «Сохранить копию в файл». Check that the file exists.
+2. Uninstall the debug Lexicon.
+3. Install `lexicon-signed-release-apk` from the latest Android CI run.
+4. Settings → «Резервная копия» → «Восстановить из файла».
+
+All later release APKs install as normal updates over the release build.
+
+## Keep the key safe
+
+The signing keystore and its password must be stored safely for every future
+release. If they are lost, updates signed by the same identity are no longer
+possible (the app would have to be reinstalled again and restored from backup).
 
 Without secrets, CI still builds debug APKs but deliberately skips release signing.

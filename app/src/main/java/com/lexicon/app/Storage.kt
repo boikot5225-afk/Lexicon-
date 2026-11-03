@@ -144,6 +144,87 @@ interface CardDao {
         ) > 0L
     }
 
+    @Query(
+        "SELECT COUNT(*) FROM cards WHERE language = :language AND word = :word " +
+            "AND translation = :translation AND id != :id"
+    )
+    suspend fun countOtherCards(id: Long, language: String, word: String, translation: String): Int
+
+    @Query("UPDATE cards SET word = :word, reading = :reading, translation = :translation WHERE id = :id")
+    suspend fun updateCardText(id: Long, word: String, reading: String, translation: String)
+
+    /** Edit the text of a card, keeping its progress. False if another card already has this word and translation. */
+    @Transaction
+    suspend fun editCard(id: Long, language: String, word: String, reading: String, translation: String): Boolean {
+        require(word.isNotBlank() && translation.isNotBlank())
+        if (countOtherCards(id, language, word.trim(), translation.trim()) > 0) return false
+        updateCardText(id, word.trim(), reading.trim(), translation.trim())
+        return true
+    }
+
+    @Query(
+        "SELECT COUNT(*) FROM card_examples WHERE cardId = :cardId AND example = :example " +
+            "AND exampleTranslation = :translation AND id != :id"
+    )
+    suspend fun countOtherExamples(id: Long, cardId: Long, example: String, translation: String): Int
+
+    @Query("UPDATE card_examples SET example = :example, exampleTranslation = :translation WHERE id = :id")
+    suspend fun updateExampleText(id: Long, example: String, translation: String)
+
+    @Query("SELECT COUNT(*) FROM card_examples WHERE cardId = :cardId")
+    suspend fun countExamples(cardId: Long): Int
+
+    @Query("DELETE FROM card_examples WHERE id = :id")
+    suspend fun deleteExampleRow(id: Long)
+
+    /**
+     * Edit one example. exampleId 0 is the legacy example stored only on the card:
+     * it becomes a real row. False if the card already has the same example.
+     */
+    @Transaction
+    suspend fun editExample(cardId: Long, exampleId: Long, text: String, translation: String): Boolean {
+        require(text.isNotBlank() && translation.isNotBlank())
+        val example = text.trim()
+        val exampleTranslation = translation.trim()
+        if (countOtherExamples(exampleId, cardId, example, exampleTranslation) > 0) return false
+        if (exampleId == 0L) {
+            return insertExample(CardExample(cardId = cardId, example = example, exampleTranslation = exampleTranslation)) > 0L
+        }
+        updateExampleText(exampleId, example, exampleTranslation)
+        return true
+    }
+
+    /** Every word keeps at least one example. False if this is the last one. */
+    @Transaction
+    suspend fun deleteExample(cardId: Long, exampleId: Long): Boolean {
+        if (exampleId == 0L || countExamples(cardId) <= 1) return false
+        deleteExampleRow(exampleId)
+        return true
+    }
+
+    @Query("SELECT * FROM cards ORDER BY id")
+    suspend fun allCards(): List<WordCard>
+
+    @Query("SELECT * FROM card_examples ORDER BY id")
+    suspend fun allExamples(): List<CardExample>
+
+    @Query("DELETE FROM cards")
+    suspend fun deleteAllCards()
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertCardsStrict(cards: List<WordCard>)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertExamplesStrict(rows: List<CardExample>)
+
+    /** Replace the whole dictionary with a backup. Any error rolls everything back. */
+    @Transaction
+    suspend fun replaceAll(cards: List<WordCard>, examples: List<CardExample>) {
+        deleteAllCards()
+        insertCardsStrict(cards)
+        insertExamplesStrict(examples)
+    }
+
     @Update
     suspend fun update(card: WordCard)
 

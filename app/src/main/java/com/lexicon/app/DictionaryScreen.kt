@@ -1,5 +1,6 @@
 package com.lexicon.app
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -28,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -88,7 +92,8 @@ fun DictionaryScreen(
 ) {
     var openId by rememberSaveable(language) { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<WordCard?>(null) }
-    var addingTo by remember { mutableStateOf<WordCard?>(null) }
+    var exampleTarget by remember { mutableStateOf<ExampleTarget?>(null) }
+    var editingCard by remember { mutableStateOf<WordCard?>(null) }
     var contextText by remember { mutableStateOf("") }
     var contextTranslation by remember { mutableStateOf("") }
     var contextError by remember { mutableStateOf("") }
@@ -205,22 +210,30 @@ fun DictionaryScreen(
             onDismissRequest = { openId = null },
             containerColor = MaterialTheme.colorScheme.surface
         ) {
+            val contexts = examples.filter { it.cardId == sheetCard.id }.ifEmpty {
+                listOf(
+                    CardExample(
+                        cardId = sheetCard.id,
+                        example = sheetCard.example,
+                        exampleTranslation = sheetCard.exampleTranslation
+                    )
+                )
+            }
             WordDetails(
                 card = sheetCard,
-                contexts = examples.filter { it.cardId == sheetCard.id }.ifEmpty {
-                    listOf(
-                        CardExample(
-                            cardId = sheetCard.id,
-                            example = sheetCard.example,
-                            exampleTranslation = sheetCard.exampleTranslation
-                        )
-                    )
-                },
+                contexts = contexts,
                 onSpeak = { speaker.speak(it, language) },
+                onEdit = { editingCard = sheetCard },
                 onAddExample = {
-                    addingTo = sheetCard
+                    exampleTarget = ExampleTarget(sheetCard, null, canDelete = false)
                     contextText = ""
                     contextTranslation = ""
+                    contextError = ""
+                },
+                onEditExample = { ex ->
+                    exampleTarget = ExampleTarget(sheetCard, ex, canDelete = contexts.size > 1 && ex.id != 0L)
+                    contextText = ex.example
+                    contextTranslation = ex.exampleTranslation
                     contextError = ""
                 },
                 onDelete = { deleting = sheetCard }
@@ -228,11 +241,22 @@ fun DictionaryScreen(
         }
     }
 
-    addingTo?.let { card ->
+    editingCard?.let { card ->
+        EditCardDialog(card = card, vm = vm, onClose = { editingCard = null })
+    }
+
+    exampleTarget?.let { target ->
+        val card = target.card
+        val editing = target.example
         AlertDialog(
-            onDismissRequest = { if (!contextSaving) addingTo = null },
+            onDismissRequest = { if (!contextSaving) exampleTarget = null },
             containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Новый пример · " + card.word, style = MaterialTheme.typography.headlineSmall) },
+            title = {
+                Text(
+                    (if (editing == null) "Новый пример · " else "Пример · ") + card.word,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -252,6 +276,35 @@ fun DictionaryScreen(
                     if (contextError.isNotEmpty()) {
                         Text(contextError, color = MaterialTheme.colorScheme.error)
                     }
+                    if (editing != null && target.canDelete) {
+                        TextButton(
+                            enabled = !contextSaving,
+                            onClick = {
+                                contextSaving = true
+                                vm.deleteExample(card.id, editing.id) { result ->
+                                    contextSaving = false
+                                    result.fold(
+                                        onSuccess = { removed ->
+                                            if (removed) exampleTarget = null
+                                            else contextError = "У слова должен остаться хотя бы один пример."
+                                        },
+                                        onFailure = { error ->
+                                            contextError = error.message ?: "Не удалось удалить пример."
+                                        }
+                                    )
+                                }
+                            }
+                        ) {
+                            Icon(
+                                LexiconIcons.Trash,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Удалить этот пример", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -260,11 +313,11 @@ fun DictionaryScreen(
                         contextText.isNotBlank() && contextTranslation.isNotBlank(),
                     onClick = {
                         contextSaving = true
-                        vm.addContext(card.id, contextText, contextTranslation) { result ->
+                        val onResult: (Result<Boolean>) -> Unit = { result ->
                             contextSaving = false
                             result.fold(
-                                onSuccess = { added ->
-                                    if (added) addingTo = null
+                                onSuccess = { saved ->
+                                    if (saved) exampleTarget = null
                                     else contextError = "Такой пример уже есть у этого слова."
                                 },
                                 onFailure = { error ->
@@ -272,11 +325,16 @@ fun DictionaryScreen(
                                 }
                             )
                         }
+                        if (editing == null) {
+                            vm.addContext(card.id, contextText, contextTranslation, onResult)
+                        } else {
+                            vm.editExample(card.id, editing.id, contextText, contextTranslation, onResult)
+                        }
                     }
                 ) { Text(if (contextSaving) "Сохранение" else "Сохранить") }
             },
             dismissButton = {
-                TextButton(enabled = !contextSaving, onClick = { addingTo = null }) {
+                TextButton(enabled = !contextSaving, onClick = { exampleTarget = null }) {
                     Text("Отмена")
                 }
             }
@@ -358,7 +416,9 @@ private fun WordDetails(
     card: WordCard,
     contexts: List<CardExample>,
     onSpeak: (String) -> Unit,
+    onEdit: () -> Unit,
     onAddExample: () -> Unit,
+    onEditExample: (CardExample) -> Unit,
     onDelete: () -> Unit
 ) {
     Column(
@@ -371,7 +431,21 @@ private fun WordDetails(
             Text(card.reading, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text(card.translation, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Normal)
-        SpeakButton("Слово", { onSpeak(card.word) })
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SpeakButton("Слово", { onSpeak(card.word) })
+            OutlinedButton(
+                onClick = onEdit,
+                modifier = Modifier.heightIn(min = 44.dp),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                contentPadding = PaddingValues(horizontal = 16.dp)
+            ) {
+                Icon(LexiconIcons.Pen, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Изменить")
+            }
+        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Overline("Примеры · " + contexts.size)
@@ -387,6 +461,9 @@ private fun WordDetails(
                 }
                 IconButton(onClick = { onSpeak(ctx.example) }) {
                     Icon(LexiconIcons.Volume, contentDescription = "Произнести пример " + (index + 1))
+                }
+                IconButton(onClick = { onEditExample(ctx) }) {
+                    Icon(LexiconIcons.Pen, contentDescription = "Изменить пример " + (index + 1))
                 }
             }
         }
@@ -428,4 +505,74 @@ private fun ProgressLine(title: String, successes: Int, intervalDays: Int, lapse
         }
         ProgressDots(successes, hard = lapses > 0)
     }
+}
+
+/** Which example the example dialog edits; example == null adds a new one. */
+private data class ExampleTarget(val card: WordCard, val example: CardExample?, val canDelete: Boolean)
+
+/** Edit word, transcription and translation; progress and examples stay. */
+@Composable
+private fun EditCardDialog(card: WordCard, vm: LexiconViewModel, onClose: () -> Unit) {
+    var word by rememberSaveable(card.id) { mutableStateOf(card.word) }
+    var reading by rememberSaveable(card.id) { mutableStateOf(card.reading) }
+    var translation by rememberSaveable(card.id) { mutableStateOf(card.translation) }
+    var error by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!saving) onClose() },
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Изменить слово", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = word,
+                    onValueChange = { word = it; error = "" },
+                    label = { Text("Слово") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = WordFont),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = reading,
+                    onValueChange = { reading = it; error = "" },
+                    label = { Text("Транскрипция (необязательно)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = translation,
+                    onValueChange = { translation = it; error = "" },
+                    label = { Text("Перевод") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Прогресс повторений и примеры сохранятся.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving && word.isNotBlank() && translation.isNotBlank(),
+                onClick = {
+                    saving = true
+                    vm.editCard(card, word, reading, translation) { result ->
+                        saving = false
+                        result.fold(
+                            onSuccess = { saved ->
+                                if (saved) onClose()
+                                else error = "Слово с таким переводом уже есть в словаре."
+                            },
+                            onFailure = { error = it.message ?: "Не удалось сохранить." }
+                        )
+                    }
+                }
+            ) { Text(if (saving) "Сохранение" else "Сохранить") }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving, onClick = onClose) { Text("Отмена") }
+        }
+    )
 }
