@@ -22,14 +22,37 @@ object WritingExercise {
      */
     fun cloze(example: String, word: String, language: String): String? {
         if (word.isBlank() || example.isBlank()) return null
+        val regex = headwordRegex(word, language)
+        if (!regex.containsMatchIn(example)) return null
+        return regex.replace(example, "____")
+    }
+
+    /** Character ranges of the headword inside an example, using the same rules as [cloze]. */
+    fun occurrences(example: String, word: String, language: String): List<IntRange> {
+        if (word.isBlank() || example.isBlank()) return emptyList()
+        return headwordRegex(word, language).findAll(example).map { it.range }.toList()
+    }
+
+    /**
+     * Indices in the trimmed expected answer that the typed answer got wrong
+     * (compared position by position, ignoring case). Used only to highlight
+     * the mistake after checking; grading itself stays in [matches].
+     */
+    fun mismatches(input: String, expected: String): Set<Int> {
+        val typed = input.trim()
+        val answer = expected.trim()
+        return answer.indices.filter { i ->
+            i >= typed.length || !typed[i].equals(answer[i], ignoreCase = true)
+        }.toSet()
+    }
+
+    private fun headwordRegex(word: String, language: String): Regex {
         val escaped = Regex.escape(word)
         val pattern = if (language.startsWith("zh") || language.startsWith("ja")) {
             escaped
         } else {
             "(?<![\\p{L}\\p{N}])" + escaped + "(?![\\p{L}\\p{N}])"
         }
-        val regex = Regex(pattern, RegexOption.IGNORE_CASE)
-        if (!regex.containsMatchIn(example)) return null
-        return regex.replace(example, "____")
+        return Regex(pattern, RegexOption.IGNORE_CASE)
     }
 }
